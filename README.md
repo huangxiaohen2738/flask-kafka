@@ -7,14 +7,14 @@
 ```python
 from flask_kafka import KafkaQueue
 
-kqueue = KafkaQueue("name", {"avro": "schema"})
+kqueue = KafkaQueue("name")
 ```
 
 #### Init
 
 ```python
 kqueue.init_app()
-topic = kqueue.subscribe("test-topic")
+topic = kqueue.subscribe("test-topic", {"avro": "schema"})
 
 
 @topic.connect
