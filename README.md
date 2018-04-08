@@ -1,3 +1,5 @@
+[![Build Status](https://travis-ci.org/huangxiaohen2738/flask-kafka.svg?branch=master)](https://travis-ci.org/huangxiaohen2738/flask-kafka)
+
 ## How to install
 
 ## How to Use
