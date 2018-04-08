@@ -10,6 +10,7 @@ name = "pypi"
 Flask = "==0.12.2"
 fastavro = "==0.16.4"
 kafka-python = "==1.3.5"
+blinker = "==1.4"
 
 
 [dev-packages]

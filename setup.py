@@ -4,7 +4,8 @@ from setuptools import setup
 install_requires = [
     "Flask>=0.12.2",
     "fastavro>=0.16.4",
-    "kafka-python>=1.3.5"
+    "kafka-python>=1.3.5",
+    "blinker>=1.4"
 ]
 
 
