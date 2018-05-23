@@ -13,7 +13,7 @@ kqueue = KafkaQueue("name")
 #### Init
 
 ```python
-kqueue.init_app()
+kqueue.init_app(app)
 topic = kqueue.subscribe("test-topic", {"avro": "schema"})
 
 
