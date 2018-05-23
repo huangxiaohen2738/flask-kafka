@@ -1,76 +1,111 @@
 import logging
+import json
 import os
 
 from blinker import Namespace
-from collections import OrderedDict
-from fastavro import schemaless_reader
-from io import BytesIO
-from kafka import KafkaConsumer
-from kafka.structs import TopicPartition
+from confluent_kafka import avro, KafkaError
+from confluent_kafka.avro import AvroProducer
+from confluent_kafka.avro import AvroConsumer
+from confluent_kafka.avro.serializer import SerializerError
+from .utils import slicer
 
 
 logger = logging.getLogger(__name__)
 
 
 class KafkaQueue(object):
-    TOPICS = OrderedDict()
+    TOPICS = []
 
-    def __init__(self, name, lag_sampling_percent=1, group_id=None):
+    def __init__(self, name):
         self.name = name
-        self.group_id = name.lower() if not group_id else group_id	
         self.signal = Namespace()
-        self.servers = None
-        self.multiples = []
-        self.cnt = 0
         self.instance_idx = int(os.environ.get("DEPLOYD_POD_INSTANCE_NO", 0))
+        self.partition_map = None
 
     def init_app(self, app):
-        self.servers = app.config["KAFKA_SERVERS"]
+        self.config = {
+            "bootstrap.servers": ",".join(app.config["KAFKA_SERVERS"]),
+            "group.id": self.name.lower(),
+            "schema.registry.url": app.config["KAFKA_SCHEMA_REGISTRY"]
+        }
+        self.partition_map = app.config["KAFKA_PARTITION_MAP"]
         self.workers = app.config["KAFKA_WORKERS"]
 
     def get_signal(self, topic):
         return self.signal.signal(topic)
 
-    def subscribe(self, topic, schema, multiples=False):
-        self.TOPICS[topic] = schema
+    def subscribe(self, topic):
+        self.TOPICS.append(topic)
         return self.get_signal(topic)
 
     def get_topics(self):
-        topics = list(self.TOPICS.keys())
+        topics = []
+        for topic in self.TOPICS:
+            topics += [topic] * self.partition_map.get(topic, 1)
         idx = self.instance_idx - 1
         if idx < 0:
             return topics
-        slice_size = int(float(len(topics)) / self.workers + 0.5)
-
-        start = idx * slice_size
-        end = start + slice_size
+        target = slicer(topics, self.workers)[idx]
         logger.info(
-            "woker idx is[%s], topics(%d) from: [%d:%d]"
-            % (idx, len(topics), start, end)
+            "woker idx is[%s], topics(%d) from: %s"
+            % (idx, len(topics), target)
         )
-        return topics[start:end]
-
-    def log_lag(self, consumer, msg):
-        self.cnt += 1
-        if self.cnt == 100:
-            topic = msg.topic
-            partition = msg.partition
-            highwater = consumer.highwater(TopicPartition(topic, partition))
-            lag = highwater - 1 - msg.offset
-            logger.info("lag <%s@%s>: %s" % (topic, partition, lag))
-            self.cnt == 0
+        return target
 
     def start_consume(self):
         logger.info("start to consume kafka %s messages!" % (self.name,))
-        topics = self.get_topics()
-        consumer = KafkaConsumer(
-            *topics,
-            bootstrap_servers=self.servers,
-            group_id=self.group_id
-        )
-        for msg in consumer:
-            self.log_lag(consumer, msg)
-            topic = msg.topic
-            schema = self.TOPICS[topic]
-            record = schemaless_reader(BytesIO(msg.value[5:]), schema)
-            self.get_signal(topic).send(self, record=record)
+        topics = list(set(self.get_topics()))
+
+        consumer = AvroConsumer(self.config)
+        consumer.subscribe(topics)
+
+        while True:
+            try:
+                msg = consumer.poll()
+            except SerializerError:
+                logger.critical("deserialization failed", exc_info=True)
+                break
+            if msg is None:
+                logger.debug("message timeout")
+                continue
+            if msg.error():
+                if msg.error().code() == KafkaError._PARTITION_EOF:
+                    logger.debug("partition eof")
+                    continue
+                else:
+                    logger.critical("encounter error: %s", msg.error())
+                    break
+            topic = msg.topic()
+            self.get_signal(topic).send(self, record=msg.value())
+
+
+class KafkaProducer(object):
+    def __init__(self):
+        self.producer = None
+        self._max_retries = 3
+        self.topics = {}
+
+    def register_topic(self, topic, schema):
+        self.topics[topic] = avro.loads(json.dumps(schema))
+
+    def init_app(self, app):
+        bootstrap_servers = ",".join(app.config["KAFKA_SERVERS"])
+        schema_registry = app.config["KAFKA_SCHEMA_REGISTRY"]
+
+        self.producer = AvroProducer({
+            "bootstrap.servers": bootstrap_servers,
+            "schema.registry.url": schema_registry
+        })
+
+    def produce(self, topic, value):
+        schema = self.topics.get(topic)
+        if schema is None:
+            raise ValueError("register [{0}] with schema first".format(topic))
+        for __ in xrange(self._max_retries):
+            try:
+                self.producer.produce(
+                    topic=topic, value=value, value_schema=schema)
+                break
+            except BufferError:
+                self.producer.poll(0.1)
+                continue
