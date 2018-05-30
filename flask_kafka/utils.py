@@ -1,4 +1,6 @@
 import itertools
+
+
 def slicer(data_list, parts):
     result = []
     for __ in range(parts):
