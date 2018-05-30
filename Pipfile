@@ -11,6 +11,7 @@ Flask = "*"
 blinker = "*"
 avro = "*"
 confluent-kafka = "*"
+requests = "*"
 
 
 [dev-packages]
