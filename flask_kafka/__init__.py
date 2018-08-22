@@ -84,6 +84,7 @@ class KafkaProducer(object):
         self.producer = None
         self._max_retries = 3
         self.topics = {}
+        self.count = 0
 
     def register_topic(self, topic, schema):
         self.topics[topic] = avro.loads(json.dumps(schema))
@@ -101,10 +102,16 @@ class KafkaProducer(object):
         schema = self.topics.get(topic)
         if schema is None:
             raise ValueError("register [{0}] with schema first".format(topic))
+            
+        self.count += 1
+        
         for __ in xrange(self._max_retries):
             try:
                 self.producer.produce(
                     topic=topic, value=value, value_schema=schema)
+                if self.count >= 100:
+                    self.flush()
+                    self.count = 0
                 break
             except BufferError:
                 self.producer.poll(0.1)
